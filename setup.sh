@@ -61,12 +61,9 @@ apt-get update && apt-get install -y \
     git \
     wget \
     unzip \
-    # OpenCV
     libopencv-dev \
     python3-opencv \
-    # COLMAP
     colmap \
-    # COLMAP dependencies
     libboost-program-options-dev \
     libboost-filesystem-dev \
     libboost-graph-dev \
