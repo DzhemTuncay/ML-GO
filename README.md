@@ -55,9 +55,17 @@ For faster processing, run on cloud GPU instances:
 
 #### RunPod (Recommended - cheapest for GPU)
 
+SSH into a RunPod instance and run the setup script:
+
 ```bash
-# Build the RunPod-optimized image
-docker build -f Dockerfile.runpod -t video-to-splat-runpod .
+# Clone the repo
+git clone YOUR_REPO_URL ML-GO && cd ML-GO
+
+# Run setup (installs everything)
+chmod +x setup.sh && ./setup.sh
+
+# Run the pipeline
+./video_to_splat.sh -v /workspace/video.mp4 -n 100 -o my_model
 ```
 
 See [docs/runpod-setup.md](docs/runpod-setup.md) for full instructions.
@@ -175,6 +183,7 @@ Once generated, you can view your `.splat` file using:
 ML-GO/
 ├── Dockerfile             # Docker build file (CPU/CUDA)
 ├── Dockerfile.runpod      # RunPod-optimized Dockerfile
+├── setup.sh               # Cloud GPU setup script (RunPod, etc.)
 ├── video_to_splat.sh      # Main pipeline script
 ├── README.md              # This file
 ├── docs/
