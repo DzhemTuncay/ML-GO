@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# But not these files
+!.gitignore
+!README.md
+!*.sh
+!utils/
+!utils/grame_extractor.py
