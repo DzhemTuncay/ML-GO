@@ -24,7 +24,7 @@ chmod +x setup_mac.sh
 
 This installs dependencies via Homebrew and builds OpenSplat with Metal/MPS support.
 
-### Linux
+### Linux / RunPod / Cloud GPU
 
 ```bash
 chmod +x setup_linux.sh
@@ -32,6 +32,8 @@ chmod +x setup_linux.sh
 ```
 
 This installs dependencies via apt-get and builds OpenSplat with CUDA support (if available).
+
+Can be used in runpod. Clone this repo into your pod and run the setup. Then you can run the pipeline in your runpod instance like you run the pipeline locally.
 
 ### Usage
 
@@ -45,17 +47,18 @@ This installs dependencies via apt-get and builds OpenSplat with CUDA support (i
 
 ### Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-v, --video` | Path to input video file | |
-| `-d, --images-dir` | Path to folder of images (skips frame extraction) | |
-| `-n, --num-frames` | Number of frames to extract from video | `100` |
-| `-i, --iterations` | Number of OpenSplat training iterations | `7000` |
-| `-s, --downscale` | Downscale factor (1=full, 2=half, 4=quarter) | `1` |
-| `-o, --output` | Output name (without extension) | Input name |
-| `--save-every` | Save checkpoint every N iterations (-1 to disable) | `200` |
-| `--val` | Use validation image to track convergence | On |
-| `-h, --help` | Show help message | |
+
+| Option             | Description                                        | Default    |
+| ------------------ | -------------------------------------------------- | ---------- |
+| `-v, --video`      | Path to input video file                           |            |
+| `-d, --images-dir` | Path to folder of images (skips frame extraction)  |            |
+| `-n, --num-frames` | Number of frames to extract from video             | `100`      |
+| `-i, --iterations` | Number of OpenSplat training iterations            | `7000`     |
+| `-s, --downscale`  | Downscale factor (1=full, 2=half, 4=quarter)       | `1`        |
+| `-o, --output`     | Output name (without extension)                    | Input name |
+| `--save-every`     | Save checkpoint every N iterations (-1 to disable) | `200`      |
+| `--val`            | Use validation image to track convergence          | On         |
+| `-h, --help`       | Show help message                                  |            |
 
 > **Note:** You must provide either `-v` (video) or `-d` (images folder), but not both.
 
@@ -92,11 +95,12 @@ Use `-s` to downscale images for faster processing and lower memory usage:
 ./video_to_splat.sh -d path/to/my_images/ -s 2 -i 3000 -o my_model
 ```
 
-| Downscale | Resolution | Speed | Memory |
-|-----------|------------|-------|--------|
-| `-s 1` | Full | Slowest | Highest |
-| `-s 2` | Half | ~2x faster | ~4x less |
-| `-s 4` | Quarter | ~4x faster | ~16x less |
+
+| Downscale | Resolution | Speed      | Memory    |
+| --------- | ---------- | ---------- | --------- |
+| `-s 1`    | Full       | Slowest    | Highest   |
+| `-s 2`    | Half       | ~2x faster | ~4x less  |
+| `-s 4`    | Quarter    | ~4x faster | ~16x less |
 
 ### Custom Video Settings
 
@@ -146,6 +150,6 @@ ML-GO/
 ## License
 
 See individual component licenses:
+
 - OpenSplat: AGPLv3
 - COLMAP: BSD
-
