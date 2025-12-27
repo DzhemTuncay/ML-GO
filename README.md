@@ -1,122 +1,69 @@
-# Video to 3D Gaussian Splat Pipeline
+# Video/Images to 3D Gaussian Splat Pipeline
 
-A complete pipeline to convert video files into 3D Gaussian Splat (`.splat`) files for 3D visualization.
+A complete pipeline to convert video files or image folders into 3D Gaussian Splat (`.splat`) files for 3D visualization.
 
 ## Overview
 
-This pipeline automates the entire process of creating a 3D Gaussian Splat from a video:
+This pipeline automates the entire process of creating a 3D Gaussian Splat from a video or images:
 
-1. **Frame Extraction** — Extracts evenly-spaced frames from your video
+1. **Frame Extraction** — Extracts evenly-spaced frames from your video *(skipped if using images)*
 2. **Feature Extraction** — COLMAP detects SIFT features in each frame
 3. **Feature Matching** — COLMAP matches features across all image pairs
 4. **Sparse Reconstruction** — COLMAP reconstructs camera poses and sparse 3D points
 5. **Gaussian Splatting** — OpenSplat trains a 3D Gaussian Splat model
 6. **Cleanup** — Removes intermediate files, keeping only the final `.splat`
 
-## Quick Start with Docker
+## Setup
 
-The easiest way to run the pipeline is using Docker — no manual dependency installation required.
-
-### Build the Docker Image
+### macOS
 
 ```bash
-# CPU version (works everywhere)
-docker build -t video-to-splat .
-
-# CUDA version (requires NVIDIA GPU)
-docker build -t video-to-splat --build-arg USE_CUDA=ON .
+chmod +x setup_mac.sh
+./setup_mac.sh
 ```
 
-### Run with Docker
+This installs dependencies via Homebrew and builds OpenSplat with Metal/MPS support.
+
+### Linux
 
 ```bash
-# Basic usage
-docker run -v $(pwd):/data video-to-splat -v /data/my_video.mp4
-
-# With custom parameters
-docker run -v $(pwd):/data video-to-splat \
-    -v /data/my_video.mp4 \
-    -n 150 \
-    -i 3000 \
-    -o my_model
-
-# The output .splat file will be in your current directory
+chmod +x setup_linux.sh
+./setup_linux.sh
 ```
 
-### Docker with NVIDIA GPU
-
-```bash
-docker run --gpus all -v $(pwd):/data video-to-splat -v /data/my_video.mp4
-```
-
-### Run on Cloud GPUs
-
-For faster processing, run on cloud GPU instances:
-
-#### RunPod (Recommended - cheapest for GPU)
-
-SSH into a RunPod instance and run the setup script:
-
-```bash
-# Clone the repo
-git clone YOUR_REPO_URL ML-GO && cd ML-GO
-
-# Run setup (installs everything)
-chmod +x setup.sh && ./setup.sh
-
-# Run the pipeline
-./video_to_splat.sh -v /workspace/video.mp4 -n 100 -o my_model
-```
-
-See [docs/runpod-setup.md](docs/runpod-setup.md) for full instructions.
-
-#### Google Cloud Platform
-
-```bash
-# Create a GPU VM
-gcloud compute instances create video-to-splat-vm \
-    --machine-type=n1-standard-8 \
-    --accelerator=type=nvidia-tesla-t4,count=1 \
-    --image-family=ubuntu-2204-lts \
-    --image-project=ubuntu-os-cloud \
-    --boot-disk-size=100GB
-```
-
-See [docs/gcp-gpu-setup.md](docs/gcp-gpu-setup.md) for full instructions.
-
----
-
-## Manual Installation
-
-If you prefer to run without Docker:
-
-### Requirements
-
-- **Python 3** with OpenCV (`pip install opencv-python`)
-- **COLMAP** — Install via `brew install colmap` (macOS) or see [COLMAP installation guide](https://colmap.github.io/install.html)
-- **OpenSplat** — Must be built in `OpenSplat/build/`. See `OpenSplat/README.md` for build instructions.
+This installs dependencies via apt-get and builds OpenSplat with CUDA support (if available).
 
 ### Usage
 
 ```bash
-./video_to_splat.sh -v <video_path> [-n <num_frames>] [-i <iterations>] [-o <output_name>]
+# From video
+./video_to_splat.sh -v <video_path> [-n <num_frames>] [-i <iterations>] [-s <downscale>] [-o <output_name>]
+
+# From images folder
+./video_to_splat.sh -d <images_dir> [-i <iterations>] [-s <downscale>] [-o <output_name>]
 ```
 
 ### Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-v, --video` | Path to input video file | **(required)** |
+| `-v, --video` | Path to input video file | |
+| `-d, --images-dir` | Path to folder of images (skips frame extraction) | |
 | `-n, --num-frames` | Number of frames to extract from video | `100` |
-| `-i, --iterations` | Number of OpenSplat training iterations | `2000` |
-| `-o, --output` | Output name for the `.splat` file | Video filename |
+| `-i, --iterations` | Number of OpenSplat training iterations | `7000` |
+| `-s, --downscale` | Downscale factor (1=full, 2=half, 4=quarter) | `1` |
+| `-o, --output` | Output name (without extension) | Input name |
+| `--save-every` | Save checkpoint every N iterations (-1 to disable) | `200` |
+| `--val` | Use validation image to track convergence | On |
 | `-h, --help` | Show help message | |
 
-## Example
+> **Note:** You must provide either `-v` (video) or `-d` (images folder), but not both.
 
-### Basic Usage
+## Examples
 
-Convert a video using default settings (100 frames, 2000 iterations):
+### From Video
+
+Convert a video using default settings (100 frames, 7000 iterations):
 
 ```bash
 ./video_to_splat.sh -v vids/IMG_2149.MOV
@@ -124,35 +71,52 @@ Convert a video using default settings (100 frames, 2000 iterations):
 
 This will create `IMG_2149/IMG_2149.splat`.
 
-### Custom Settings
+Checkpoints are saved every 200 iterations by default (e.g., `IMG_2149_200.splat`, `IMG_2149_400.splat`, etc.).
 
-Extract 200 frames and train for 5000 iterations:
+### From Images Folder
+
+Use an existing folder of images:
 
 ```bash
-./video_to_splat.sh -v vids/my_object.mp4 -n 200 -i 5000 -o my_3d_model
+./video_to_splat.sh -d path/to/my_images/ -i 3000 -o my_model
+```
+
+This will create `my_model/my_model.splat`.
+
+### With Downscaling (for large images)
+
+Use `-s` to downscale images for faster processing and lower memory usage:
+
+```bash
+# Process at half resolution
+./video_to_splat.sh -d path/to/my_images/ -s 2 -i 3000 -o my_model
+```
+
+| Downscale | Resolution | Speed | Memory |
+|-----------|------------|-------|--------|
+| `-s 1` | Full | Slowest | Highest |
+| `-s 2` | Half | ~2x faster | ~4x less |
+| `-s 4` | Quarter | ~4x faster | ~16x less |
+
+### Custom Video Settings
+
+Extract 200 frames and train for 10000 iterations:
+
+```bash
+./video_to_splat.sh -v vids/my_object.mp4 -n 200 -i 10000 -o my_3d_model
 ```
 
 This will create `my_3d_model/my_3d_model.splat`.
 
-## Tips for Best Results
+### Monitor Convergence
 
-### Recording Your Video
+Use validation to track when training has converged:
 
-- **Move slowly** around the object/scene
-- **Overlap** — Ensure each frame shares ~60-80% content with adjacent frames
-- **Lighting** — Use consistent, diffuse lighting (avoid harsh shadows)
-- **Avoid motion blur** — Keep the camera steady while moving
-- **Full coverage** — Capture the object from multiple angles (360° if possible)
+```bash
+./video_to_splat.sh -v vids/my_object.mp4 --val -o my_model
+```
 
-### Choosing Parameters
-
-| Scenario | Frames | Iterations |
-|----------|--------|------------|
-| Quick preview | 50-100 | 1000 |
-| Standard quality | 100-200 | 2000-3000 |
-| High quality | 200-300 | 5000+ |
-
-More frames and iterations = better quality but longer processing time.
+This withholds one image and prints validation loss at the end. Combined with `--save-every`, you can identify the optimal number of iterations for your scene.
 
 ## Viewing Your Splat
 
@@ -162,33 +126,14 @@ Once generated, you can view your `.splat` file using:
 - [Antimatter15 Viewer](https://antimatter15.com/splat/) — Web-based viewer
 - [SuperSplat Editor](https://playcanvas.com/supersplat/editor) — Edit and clean up your splat
 
-## Troubleshooting
-
-### COLMAP fails with "No good initial image pair found"
-- Try extracting more frames (`-n 200`)
-- Ensure your video has enough visual features and camera movement
-
-### OpenSplat crashes or runs out of memory
-- Reduce the number of frames
-- Reduce training iterations
-
-### Poor reconstruction quality
-- Record video with more overlap between frames
-- Ensure good lighting and sharp images
-- Avoid reflective or transparent surfaces
-
 ## Project Structure
 
 ```
 ML-GO/
-├── Dockerfile             # Docker build file (CPU/CUDA)
-├── Dockerfile.runpod      # RunPod-optimized Dockerfile
-├── setup.sh               # Cloud GPU setup script (RunPod, etc.)
+├── setup_mac.sh           # macOS setup script
+├── setup_linux.sh         # Linux setup script
 ├── video_to_splat.sh      # Main pipeline script
 ├── README.md              # This file
-├── docs/
-│   ├── gcp-gpu-setup.md   # GCP deployment guide
-│   └── runpod-setup.md    # RunPod deployment guide
 ├── utils/
 │   └── grame_extractor.py # Frame extraction utility
 ├── OpenSplat/

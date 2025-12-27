@@ -1,14 +1,16 @@
 #!/bin/bash
 
 # =============================================================================
-# RunPod / Cloud GPU Setup Script
+# Linux Setup Script (with CUDA support)
 # =============================================================================
-# Run this script on a fresh RunPod instance or cloud GPU VM to install
-# all dependencies needed for the video-to-splat pipeline.
+# Run this script on a Linux machine or cloud GPU VM to install all
+# dependencies needed for the video-to-splat pipeline.
+#
+# Based on: https://github.com/pierotofy/OpenSplat
 #
 # Usage:
-#   chmod +x setup.sh
-#   ./setup.sh
+#   chmod +x setup_linux.sh
+#   ./setup_linux.sh
 # =============================================================================
 
 set -e
@@ -34,6 +36,10 @@ print_warning() {
     echo -e "${YELLOW}⚠ $1${NC}"
 }
 
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
 # Detect workspace directory
 if [ -d "/workspace" ]; then
     WORKSPACE="/workspace"
@@ -45,7 +51,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-print_step "Video-to-Splat Setup"
+print_step "Video-to-Splat Linux Setup"
 echo "Workspace: $WORKSPACE"
 echo "Script directory: $SCRIPT_DIR"
 
@@ -54,15 +60,15 @@ echo "Script directory: $SCRIPT_DIR"
 # =============================================================================
 print_step "Installing system dependencies"
 
-apt-get update && apt-get install -y \
+sudo apt-get update && sudo apt-get install -y \
     build-essential \
     cmake \
-    ninja-build \
     git \
     wget \
     unzip \
     libopencv-dev \
     python3-opencv \
+    python3-pip \
     colmap \
     libboost-program-options-dev \
     libboost-filesystem-dev \
@@ -88,7 +94,7 @@ print_success "System dependencies installed"
 # =============================================================================
 print_step "Installing Python packages"
 
-pip install --no-cache-dir opencv-python-headless numpy
+pip3 install --no-cache-dir opencv-python-headless numpy
 
 print_success "Python packages installed"
 
@@ -106,27 +112,32 @@ else
     if command -v nvcc &> /dev/null; then
         CUDA_VERSION=$(nvcc --version | grep "release" | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p')
         echo "Detected CUDA version: $CUDA_VERSION"
+        HAS_CUDA=true
     else
-        CUDA_VERSION="12.4"
-        print_warning "Could not detect CUDA version, assuming $CUDA_VERSION"
+        HAS_CUDA=false
+        print_warning "CUDA not detected, will download CPU version"
     fi
 
-    # Map CUDA version to libtorch URL
-    case "$CUDA_VERSION" in
-        12.4*)
-            TORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
-            ;;
-        12.1*)
-            TORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu121.zip"
-            ;;
-        11.8*)
-            TORCH_URL="https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu118.zip"
-            ;;
-        *)
-            print_warning "Unknown CUDA version $CUDA_VERSION, using CUDA 12.4 libtorch"
-            TORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
-            ;;
-    esac
+    # Map CUDA version to libtorch URL (using versions from OpenSplat docs)
+    if [ "$HAS_CUDA" = false ]; then
+        TORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip"
+    else
+        case "$CUDA_VERSION" in
+            12.4*)
+                TORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
+                ;;
+            12.1*)
+                TORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu121.zip"
+                ;;
+            11.8*)
+                TORCH_URL="https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu118.zip"
+                ;;
+            *)
+                print_warning "Unknown CUDA version $CUDA_VERSION, using CUDA 12.4 libtorch"
+                TORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
+                ;;
+        esac
+    fi
 
     echo "Downloading libtorch from: $TORCH_URL"
     wget -q --show-progress "$TORCH_URL" -O /tmp/libtorch.zip
@@ -158,13 +169,21 @@ print_step "Building OpenSplat"
 cd "$OPENSPLAT_DIR"
 mkdir -p build && cd build
 
-cmake .. \
-    -GNinja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$LIBTORCH_DIR" \
-    -DCMAKE_CUDA_ARCHITECTURES="70;75;80;86;89;90"
+# Build with CUDA if available
+if command -v nvcc &> /dev/null; then
+    echo "Building with CUDA support..."
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="$LIBTORCH_DIR" \
+        -DCMAKE_CUDA_ARCHITECTURES="70;75;80;86;89;90"
+else
+    echo "Building CPU-only..."
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="$LIBTORCH_DIR"
+fi
 
-ninja
+make -j$(nproc)
 
 print_success "OpenSplat built successfully"
 
@@ -198,14 +217,14 @@ print_step "Verifying installation"
 if command -v colmap &> /dev/null; then
     print_success "COLMAP: $(colmap --version 2>&1 | head -1)"
 else
-    echo -e "${RED}✗ COLMAP not found${NC}"
+    print_error "COLMAP not found"
 fi
 
 # Check OpenSplat
 if [ -f "$OPENSPLAT_DIR/build/opensplat" ]; then
     print_success "OpenSplat: $OPENSPLAT_DIR/build/opensplat"
 else
-    echo -e "${RED}✗ OpenSplat binary not found${NC}"
+    print_error "OpenSplat binary not found"
 fi
 
 # Check GPU
@@ -213,7 +232,7 @@ if command -v nvidia-smi &> /dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
     print_success "GPU: $GPU_NAME"
 else
-    print_warning "No GPU detected (will run on CPU)"
+    print_warning "No NVIDIA GPU detected (will run on CPU)"
 fi
 
 # =============================================================================
@@ -230,4 +249,3 @@ echo ""
 echo "If running in a new terminal, first run:"
 echo -e "  ${YELLOW}export LD_LIBRARY_PATH=$LIBTORCH_DIR/lib:\$LD_LIBRARY_PATH${NC}"
 echo ""
-

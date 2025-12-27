@@ -13,8 +13,12 @@ set -e  # Exit on error
 
 # Default values
 NUM_FRAMES=100
-NUM_ITERATIONS=2000
+NUM_ITERATIONS=7000
+DOWNSCALE_FACTOR=1
 OUTPUT_NAME=""
+INPUT_IMAGES_DIR=""
+SAVE_EVERY=200
+USE_VALIDATION=true
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,17 +32,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Print usage
 usage() {
-    echo "Usage: $0 -v <video_path> [-n <num_frames>] [-i <iterations>] [-o <output_name>]"
+    echo "Usage: $0 <-v video_path | -d images_dir> [-n <num_frames>] [-i <iterations>] [-s <downscale>] [-o <output_name>] [--save-every <N>] [--val]"
     echo ""
     echo "Options:"
-    echo "  -v, --video       Path to input video file (required)"
-    echo "  -n, --num-frames  Number of frames to extract (default: $NUM_FRAMES)"
-    echo "  -i, --iterations  Number of training iterations for OpenSplat (default: $NUM_ITERATIONS)"
-    echo "  -o, --output      Output name for project folder and .splat file (default: video filename)"
-    echo "  -h, --help        Show this help message"
+    echo "  -v, --video        Path to input video file"
+    echo "  -d, --images-dir   Path to folder containing images (skips frame extraction)"
+    echo "  -n, --num-frames   Number of frames to extract from video (default: $NUM_FRAMES)"
+    echo "  -i, --iterations   Number of training iterations for OpenSplat (default: $NUM_ITERATIONS)"
+    echo "  -s, --downscale    Downscale factor for images: 1=full, 2=half, 4=quarter (default: $DOWNSCALE_FACTOR)"
+    echo "  -o, --output       Output name for project folder and .splat file (default: input name)"
+    echo "  --save-every       Save checkpoint every N iterations (default: $SAVE_EVERY, use -1 to disable)"
+    echo "  --val              Use validation image to track convergence"
+    echo "  -h, --help         Show this help message"
     echo ""
-    echo "Example:"
+    echo "Examples:"
     echo "  $0 -v /path/to/video.mp4 -n 150 -i 3000 -o my_model"
+    echo "  $0 -v /path/to/video.mp4 --save-every 1000 --val -o my_model  # Monitor convergence"
+    echo "  $0 -d /path/to/images/ -i 3000 -s 2 -o my_model"
     exit 1
 }
 
@@ -73,6 +83,10 @@ while [[ $# -gt 0 ]]; do
             VIDEO_PATH="$2"
             shift 2
             ;;
+        -d|--images-dir)
+            INPUT_IMAGES_DIR="$2"
+            shift 2
+            ;;
         -n|--num-frames)
             NUM_FRAMES="$2"
             shift 2
@@ -81,9 +95,21 @@ while [[ $# -gt 0 ]]; do
             NUM_ITERATIONS="$2"
             shift 2
             ;;
+        -s|--downscale)
+            DOWNSCALE_FACTOR="$2"
+            shift 2
+            ;;
         -o|--output)
             OUTPUT_NAME="$2"
             shift 2
+            ;;
+        --save-every)
+            SAVE_EVERY="$2"
+            shift 2
+            ;;
+        --val)
+            USE_VALIDATION=true
+            shift
             ;;
         -h|--help)
             usage
@@ -95,21 +121,40 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check required arguments
-if [ -z "$VIDEO_PATH" ]; then
-    print_error "Video path is required"
+# Check required arguments - need either video or images directory
+if [ -z "$VIDEO_PATH" ] && [ -z "$INPUT_IMAGES_DIR" ]; then
+    print_error "Either video path (-v) or images directory (-d) is required"
     usage
 fi
 
-# Check if video file exists
-if [ ! -f "$VIDEO_PATH" ]; then
-    print_error "Video file not found: $VIDEO_PATH"
-    exit 1
+if [ -n "$VIDEO_PATH" ] && [ -n "$INPUT_IMAGES_DIR" ]; then
+    print_error "Cannot specify both video (-v) and images directory (-d)"
+    usage
 fi
 
-# Set output name from video filename if not provided
-if [ -z "$OUTPUT_NAME" ]; then
-    OUTPUT_NAME=$(basename "$VIDEO_PATH" | sed 's/\.[^.]*$//')
+# Determine input mode
+if [ -n "$INPUT_IMAGES_DIR" ]; then
+    INPUT_MODE="images"
+    # Check if images directory exists
+    if [ ! -d "$INPUT_IMAGES_DIR" ]; then
+        print_error "Images directory not found: $INPUT_IMAGES_DIR"
+        exit 1
+    fi
+    # Set output name from directory name if not provided
+    if [ -z "$OUTPUT_NAME" ]; then
+        OUTPUT_NAME=$(basename "$INPUT_IMAGES_DIR")
+    fi
+else
+    INPUT_MODE="video"
+    # Check if video file exists
+    if [ ! -f "$VIDEO_PATH" ]; then
+        print_error "Video file not found: $VIDEO_PATH"
+        exit 1
+    fi
+    # Set output name from video filename if not provided
+    if [ -z "$OUTPUT_NAME" ]; then
+        OUTPUT_NAME=$(basename "$VIDEO_PATH" | sed 's/\.[^.]*$//')
+    fi
 fi
 
 # Set up paths
@@ -146,13 +191,17 @@ if [ ! -f "$OPENSPLAT_BIN" ]; then
 fi
 print_success "OpenSplat found"
 
-# Check for frame extractor script
+# Check for frame extractor script (only needed for video input)
 FRAME_EXTRACTOR="${SCRIPT_DIR}/utils/grame_extractor.py"
-if [ ! -f "$FRAME_EXTRACTOR" ]; then
-    print_error "Frame extractor script not found at: $FRAME_EXTRACTOR"
-    exit 1
+if [ "$INPUT_MODE" = "video" ]; then
+    if [ ! -f "$FRAME_EXTRACTOR" ]; then
+        print_error "Frame extractor script not found at: $FRAME_EXTRACTOR"
+        exit 1
+    fi
+    print_success "Frame extractor script found"
+else
+    print_success "Using existing images directory (frame extraction skipped)"
 fi
-print_success "Frame extractor script found"
 
 # Create project directory
 print_step "Setting up project directory"
@@ -161,19 +210,40 @@ mkdir -p "$SPARSE_DIR"
 print_success "Created project directory: $PROJECT_DIR"
 
 # =============================================================================
-# Step 1: Extract frames from video
+# Step 1: Extract frames from video (or use existing images)
 # =============================================================================
-print_step "Step 1: Extracting $NUM_FRAMES frames from video"
+if [ "$INPUT_MODE" = "video" ]; then
+    print_step "Step 1: Extracting $NUM_FRAMES frames from video"
 
-python3 "$FRAME_EXTRACTOR" "$VIDEO_PATH" -n "$NUM_FRAMES" -o "$IMAGES_DIR"
+    python3 "$FRAME_EXTRACTOR" "$VIDEO_PATH" -n "$NUM_FRAMES" -o "$IMAGES_DIR"
 
-if [ ! -d "$IMAGES_DIR" ] || [ -z "$(ls -A "$IMAGES_DIR")" ]; then
-    print_error "Frame extraction failed - no images found"
-    exit 1
+    if [ ! -d "$IMAGES_DIR" ] || [ -z "$(ls -A "$IMAGES_DIR")" ]; then
+        print_error "Frame extraction failed - no images found"
+        exit 1
+    fi
+
+    EXTRACTED_COUNT=$(ls -1 "$IMAGES_DIR"/*.png 2>/dev/null | wc -l)
+    print_success "Extracted $EXTRACTED_COUNT frames to $IMAGES_DIR"
+    CLEANUP_IMAGES=true
+else
+    print_step "Step 1: Copying images to project directory"
+    
+    # Count images in source directory (png, jpg, jpeg)
+    IMAGE_COUNT=$(find "$INPUT_IMAGES_DIR" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) | wc -l)
+    
+    if [ "$IMAGE_COUNT" -eq 0 ]; then
+        print_error "No images found in: $INPUT_IMAGES_DIR"
+        exit 1
+    fi
+    
+    # Copy images to project directory so OpenSplat can find them
+    mkdir -p "$IMAGES_DIR"
+    cp "$INPUT_IMAGES_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG} "$IMAGES_DIR/" 2>/dev/null || true
+    
+    COPIED_COUNT=$(find "$IMAGES_DIR" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) | wc -l)
+    print_success "Copied $COPIED_COUNT images to $IMAGES_DIR"
+    CLEANUP_IMAGES=true
 fi
-
-EXTRACTED_COUNT=$(ls -1 "$IMAGES_DIR"/*.png 2>/dev/null | wc -l)
-print_success "Extracted $EXTRACTED_COUNT frames to $IMAGES_DIR"
 
 # =============================================================================
 # Step 2: COLMAP Feature Extraction
@@ -184,8 +254,7 @@ colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
     --image_path "$IMAGES_DIR" \
     --ImageReader.single_camera 1 \
-    --ImageReader.camera_model SIMPLE_RADIAL \
-    --SiftExtraction.use_gpu 1
+    --ImageReader.camera_model SIMPLE_RADIAL
 
 print_success "Feature extraction complete"
 
@@ -195,10 +264,9 @@ print_success "Feature extraction complete"
 print_step "Step 3: COLMAP Exhaustive Matching"
 
 colmap exhaustive_matcher \
-    --database_path "$DATABASE_PATH" \
-    --SiftMatching.use_gpu 1
+    --database_path "$DATABASE_PATH"
 
-print_success "Feature matching complete"
+print_success "Exhaustive matching complete"
 
 # =============================================================================
 # Step 4: COLMAP Mapper (Sparse Reconstruction)
@@ -225,14 +293,29 @@ print_success "Reconstruction saved to $SPARSE_DIR/0"
 # =============================================================================
 # Step 5: Run OpenSplat
 # =============================================================================
-print_step "Step 5: Running OpenSplat (${NUM_ITERATIONS} iterations)"
+print_step "Step 5: Running OpenSplat (${NUM_ITERATIONS} iterations, downscale=${DOWNSCALE_FACTOR}x)"
+
+# Create symlink so OpenSplat can find images relative to sparse/0
+# OpenSplat looks for images at ../images/ relative to the .bin files
+ln -sfn "$IMAGES_DIR" "$SPARSE_DIR/0/images"
 
 # Change to project directory and run OpenSplat
 cd "$PROJECT_DIR"
 
-"$OPENSPLAT_BIN" "$SPARSE_DIR/0" \
-    -n "$NUM_ITERATIONS" \
-    -o "$OUTPUT_SPLAT"
+# Build OpenSplat command with optional flags
+OPENSPLAT_CMD="$OPENSPLAT_BIN $SPARSE_DIR/0 -n $NUM_ITERATIONS -d $DOWNSCALE_FACTOR -o $OUTPUT_SPLAT"
+
+if [ "$SAVE_EVERY" -gt 0 ] 2>/dev/null; then
+    OPENSPLAT_CMD="$OPENSPLAT_CMD --save-every $SAVE_EVERY"
+    print_success "Saving checkpoints every $SAVE_EVERY iterations"
+fi
+
+if [ "$USE_VALIDATION" = true ]; then
+    OPENSPLAT_CMD="$OPENSPLAT_CMD --val"
+    print_success "Using validation image to track convergence"
+fi
+
+eval $OPENSPLAT_CMD
 
 if [ ! -f "$OUTPUT_SPLAT" ]; then
     print_error "OpenSplat failed - output file not found"
@@ -246,10 +329,12 @@ print_success "OpenSplat training complete"
 # =============================================================================
 print_step "Step 6: Cleaning up intermediate files"
 
-# Remove images directory
-if [ -d "$IMAGES_DIR" ]; then
+# Remove images directory (only if we extracted them from video)
+if [ "$CLEANUP_IMAGES" = true ] && [ -d "$IMAGES_DIR" ]; then
     rm -rf "$IMAGES_DIR"
-    print_success "Removed images directory"
+    print_success "Removed extracted images directory"
+else
+    print_success "Kept original images directory"
 fi
 
 # Remove sparse reconstruction directory
